@@ -103,7 +103,9 @@ export default function Profile() {
 
   if (loading) return <div className="loading">加载中...</div>;
 
-  const upcomingEvents = registrations.filter(r => r.event_status === 'upcoming');
+  const upcomingEvents = registrations.filter(
+    r => r.event_status === 'upcoming' && r.payment_status !== 'refunded'
+  );
   const finishedEvents = registrations.filter(r => r.event_status === 'finished');
 
   return (
