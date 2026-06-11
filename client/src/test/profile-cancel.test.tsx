@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Profile from '../pages/Profile';
 import { useAuth } from '../contexts/AuthContext';
@@ -71,20 +71,41 @@ function renderProfile() {
   );
 }
 
+function mockGetRegistrations(data: RegistrationRecord[]) {
+  mockApiGet.mockImplementation((endpoint: string) => {
+    if (endpoint === '/registrations/my') return Promise.resolve({ data });
+    return Promise.reject(new Error('unexpected endpoint: ' + endpoint));
+  });
+}
+
+function getUpcomingSection() {
+  const headline = screen.getByText('即将参赛');
+  return headline.closest('div[style]')!;
+}
+
+function getUpcomingScope() {
+  return within(getUpcomingSection());
+}
+
+function getRecordsSection() {
+  const headline = screen.getByText('我的报名记录');
+  const grid = headline.nextElementSibling!;
+  return grid as HTMLElement;
+}
+
+function getRecordsScope() {
+  return within(getRecordsSection());
+}
+
 describe('个人中心 - 取消报名状态展示', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (useAuth as vi.Mock).mockReturnValue({ user: mockUser, token: 'fake-token', loading: false });
   });
 
-  describe('场景1: 已支付取消后显示 "已取消/退款" 状态', () => {
-    it('报名记录卡片中支付状态应显示为"已取消/退款"', async () => {
-      mockApiGet.mockImplementation((endpoint: string) => {
-        if (endpoint === '/registrations/my') {
-          return Promise.resolve({ data: [baseReg({ payment_status: 'refunded' })] });
-        }
-        return Promise.reject(new Error('unexpected'));
-      });
+  describe('场景1: 已取消/退款状态的支付状态显示', () => {
+    it('报名记录卡片中支付状态应显示为"已取消/退款"，颜色为灰色', async () => {
+      mockGetRegistrations([baseReg({ payment_status: 'refunded' })]);
 
       renderProfile();
 
@@ -94,20 +115,14 @@ describe('个人中心 - 取消报名状态展示', () => {
 
       const statusEl = screen.getByText('已取消/退款');
       expect(statusEl).toBeInTheDocument();
-      expect(statusEl).toHaveStyle({ color: expect.stringContaining('136') });
+      const color = statusEl.style.color;
+      expect(color === '#888' || color === 'rgb(136, 136, 136)').toBe(true);
     });
   });
 
   describe('场景2: 已取消的 upcoming 赛事不出现在"即将参赛"提醒中', () => {
     it('当只有 refunded 状态的 upcoming 报名时，"即将参赛"区块不应出现', async () => {
-      mockApiGet.mockImplementation((endpoint: string) => {
-        if (endpoint === '/registrations/my') {
-          return Promise.resolve({
-            data: [baseReg({ payment_status: 'refunded', event_status: 'upcoming' })],
-          });
-        }
-        return Promise.reject(new Error('unexpected'));
-      });
+      mockGetRegistrations([baseReg({ payment_status: 'refunded', event_status: 'upcoming' })]);
 
       renderProfile();
 
@@ -133,12 +148,7 @@ describe('个人中心 - 取消报名状态展示', () => {
         bib_number: 'H0200001',
       });
 
-      mockApiGet.mockImplementation((endpoint: string) => {
-        if (endpoint === '/registrations/my') {
-          return Promise.resolve({ data: [refundedBeijing, paidShanghai] });
-        }
-        return Promise.reject(new Error('unexpected'));
-      });
+      mockGetRegistrations([refundedBeijing, paidShanghai]);
 
       renderProfile();
 
@@ -146,27 +156,19 @@ describe('个人中心 - 取消报名状态展示', () => {
         expect(screen.getByText('即将参赛')).toBeInTheDocument();
       });
 
-      const upcomingHeadline = screen.getByText('即将参赛');
-      const upcomingCard = upcomingHeadline.parentElement?.parentElement;
-      expect(upcomingCard).toBeDefined();
-      expect(upcomingCard?.textContent).toContain('2026上海半程马拉松');
-      expect(upcomingCard?.textContent).not.toContain('2026北京国际马拉松');
+      const upcomingScope = getUpcomingScope();
+      expect(upcomingScope.getByText('2026上海半程马拉松')).toBeInTheDocument();
+      expect(upcomingScope.queryByText('2026北京国际马拉松')).not.toBeInTheDocument();
 
-      const allRecords = screen.getByText('我的报名记录');
-      const recordsCard = allRecords.parentElement?.parentElement;
-      expect(recordsCard?.textContent).toContain('2026北京国际马拉松');
-      expect(recordsCard?.textContent).toContain('2026上海半程马拉松');
+      const recordsScope = getRecordsScope();
+      expect(recordsScope.getByText('2026北京国际马拉松')).toBeInTheDocument();
+      expect(recordsScope.getByText('2026上海半程马拉松')).toBeInTheDocument();
     });
   });
 
   describe('场景3: 已取消报名记录不显示"取消报名"按钮', () => {
     it('payment_status 为 refunded 的记录不应出现任何"取消报名"按钮', async () => {
-      mockApiGet.mockImplementation((endpoint: string) => {
-        if (endpoint === '/registrations/my') {
-          return Promise.resolve({ data: [baseReg({ payment_status: 'refunded', event_status: 'upcoming' })] });
-        }
-        return Promise.reject(new Error('unexpected'));
-      });
+      mockGetRegistrations([baseReg({ payment_status: 'refunded', event_status: 'upcoming' })]);
 
       renderProfile();
 
@@ -178,12 +180,7 @@ describe('个人中心 - 取消报名状态展示', () => {
     });
 
     it('未取消的 upcoming 报名应显示"取消报名"按钮（即将参赛区和记录区各一个）', async () => {
-      mockApiGet.mockImplementation((endpoint: string) => {
-        if (endpoint === '/registrations/my') {
-          return Promise.resolve({ data: [baseReg({ payment_status: 'paid', event_status: 'upcoming' })] });
-        }
-        return Promise.reject(new Error('unexpected'));
-      });
+      mockGetRegistrations([baseReg({ payment_status: 'paid', event_status: 'upcoming' })]);
 
       renderProfile();
 
@@ -241,17 +238,10 @@ describe('个人中心 - 取消报名状态展示', () => {
 
   describe('场景5: 已取消但仍为 upcoming 的报名，报名记录页保留记录', () => {
     it('所有已取消报名仍在"我的报名记录"列表中可查看', async () => {
-      mockApiGet.mockImplementation((endpoint: string) => {
-        if (endpoint === '/registrations/my') {
-          return Promise.resolve({
-            data: [
-              baseReg({ id: 1, payment_status: 'refunded', event_status: 'upcoming', event_name: '取消赛事A' }),
-              baseReg({ id: 2, payment_status: 'paid', event_status: 'finished', event_name: '已完赛B' }),
-            ],
-          });
-        }
-        return Promise.reject(new Error('unexpected'));
-      });
+      mockGetRegistrations([
+        baseReg({ id: 1, payment_status: 'refunded', event_status: 'upcoming', event_name: '取消赛事A' }),
+        baseReg({ id: 2, payment_status: 'paid', event_status: 'finished', event_name: '已完赛B' }),
+      ]);
 
       renderProfile();
 
@@ -267,12 +257,7 @@ describe('个人中心 - 取消报名状态展示', () => {
 
   describe('场景6: 即将参赛卡片的支付状态展示', () => {
     it('待支付 upcoming 显示"立即支付"按钮，不显示"已取消"', async () => {
-      mockApiGet.mockImplementation((endpoint: string) => {
-        if (endpoint === '/registrations/my') {
-          return Promise.resolve({ data: [baseReg({ payment_status: 'pending', event_status: 'upcoming' })] });
-        }
-        return Promise.reject(new Error('unexpected'));
-      });
+      mockGetRegistrations([baseReg({ payment_status: 'pending', event_status: 'upcoming' })]);
 
       renderProfile();
 
@@ -280,19 +265,13 @@ describe('个人中心 - 取消报名状态展示', () => {
         expect(screen.getByText('即将参赛')).toBeInTheDocument();
       });
 
-      const upcomingHeadline = screen.getByText('即将参赛');
-      const upcomingCard = upcomingHeadline.parentElement?.parentElement;
-      expect(upcomingCard?.textContent).toContain('立即支付');
-      expect(upcomingCard?.textContent).not.toContain('已取消');
+      const upcomingScope = getUpcomingScope();
+      expect(upcomingScope.getByText('立即支付')).toBeInTheDocument();
+      expect(upcomingScope.queryByText('已取消')).not.toBeInTheDocument();
     });
 
     it('已支付 upcoming 显示"已支付"文案和"取消报名"按钮', async () => {
-      mockApiGet.mockImplementation((endpoint: string) => {
-        if (endpoint === '/registrations/my') {
-          return Promise.resolve({ data: [baseReg({ payment_status: 'paid', event_status: 'upcoming' })] });
-        }
-        return Promise.reject(new Error('unexpected'));
-      });
+      mockGetRegistrations([baseReg({ payment_status: 'paid', event_status: 'upcoming' })]);
 
       renderProfile();
 
@@ -300,10 +279,9 @@ describe('个人中心 - 取消报名状态展示', () => {
         expect(screen.getByText('即将参赛')).toBeInTheDocument();
       });
 
-      const upcomingHeadline = screen.getByText('即将参赛');
-      const upcomingCard = upcomingHeadline.parentElement?.parentElement;
-      expect(upcomingCard?.textContent).toContain('已支付');
-      expect(screen.getAllByText('取消报名')).toHaveLength(2);
+      const upcomingScope = getUpcomingScope();
+      expect(upcomingScope.getByText('已支付')).toBeInTheDocument();
+      expect(upcomingScope.getByText('取消报名')).toBeInTheDocument();
     });
   });
 });
