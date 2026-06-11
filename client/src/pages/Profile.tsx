@@ -30,6 +30,7 @@ export default function Profile() {
   const [registrations, setRegistrations] = useState<RegistrationRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [payingId, setPayingId] = useState<number | null>(null);
+  const [cancelingId, setCancelingId] = useState<number | null>(null);
   const [uploadingId, setUploadingId] = useState<number | null>(null);
   const [finishTime, setFinishTime] = useState('');
   const [certUrl, setCertUrl] = useState('');
@@ -58,6 +59,28 @@ export default function Profile() {
       alert('支付失败');
     } finally {
       setPayingId(null);
+    }
+  };
+
+  const handleCancel = async (reg: RegistrationRecord) => {
+    const isPaid = reg.payment_status === 'paid';
+    const confirmMsg = isPaid
+      ? `确定要取消《${reg.event_name}》的报名吗？\n已支付费用将按原路退回。`
+      : `确定要取消《${reg.event_name}》的报名吗？`;
+    if (!window.confirm(confirmMsg)) return;
+
+    setCancelingId(reg.id);
+    try {
+      const res = await api.delete<{ data: { message: string; refunded?: boolean; fee?: number } }>(
+        `/registrations/${reg.id}`
+      );
+      alert(res.data?.message || '取消成功');
+      fetchRegistrations();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : '取消失败';
+      alert(msg);
+    } finally {
+      setCancelingId(null);
     }
   };
 
@@ -124,17 +147,29 @@ export default function Profile() {
                     参赛号码: {reg.bib_number}
                   </div>
                 </div>
-                <div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                   {reg.payment_status === 'pending' ? (
                     <button
                       className="btn btn-primary"
                       onClick={() => handlePay(reg.id)}
-                      disabled={payingId === reg.id}
+                      disabled={payingId === reg.id || cancelingId === reg.id}
                     >
                       {payingId === reg.id ? '支付中...' : '立即支付'}
                     </button>
-                  ) : (
+                  ) : reg.payment_status === 'paid' ? (
                     <span style={{ color: '#2e7d32', fontWeight: 600 }}>已支付</span>
+                  ) : (
+                    <span style={{ color: '#888', fontWeight: 600 }}>已取消</span>
+                  )}
+                  {reg.event_status === 'upcoming' && reg.payment_status !== 'refunded' && (
+                    <button
+                      className="btn btn-danger"
+                      onClick={() => handleCancel(reg)}
+                      disabled={cancelingId === reg.id || payingId === reg.id}
+                      style={{ background: '#e53935', border: 'none' }}
+                    >
+                      {cancelingId === reg.id ? '取消中...' : '取消报名'}
+                    </button>
                   )}
                 </div>
               </div>
@@ -177,19 +212,31 @@ export default function Profile() {
                     <div>
                       支付状态:
                       <span style={{
-                        color: reg.payment_status === 'paid' ? '#2e7d32' : '#e65100',
+                        color: reg.payment_status === 'paid' ? '#2e7d32' : reg.payment_status === 'refunded' ? '#888' : '#e65100',
                         fontWeight: 600,
                         marginLeft: 4,
                       }}>
-                        {reg.payment_status === 'paid' ? '已支付' : reg.payment_status === 'pending' ? '待支付' : '已退款'}
+                        {reg.payment_status === 'paid' ? '已支付' : reg.payment_status === 'pending' ? '待支付' : '已取消/退款'}
                       </span>
                     </div>
                     {reg.finish_time && <div>完赛成绩: {reg.finish_time}</div>}
                   </div>
                 </div>
-                <span className={`badge badge-${reg.event_status}`}>
-                  {reg.event_status === 'upcoming' ? '即将开赛' : reg.event_status === 'finished' ? '已结束' : '进行中'}
-                </span>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
+                  <span className={`badge badge-${reg.event_status}`}>
+                    {reg.event_status === 'upcoming' ? '即将开赛' : reg.event_status === 'finished' ? '已结束' : '进行中'}
+                  </span>
+                  {reg.event_status === 'upcoming' && reg.payment_status !== 'refunded' && (
+                    <button
+                      className="btn btn-danger"
+                      onClick={() => handleCancel(reg)}
+                      disabled={cancelingId === reg.id || payingId === reg.id}
+                      style={{ background: '#e53935', border: 'none', fontSize: 13 }}
+                    >
+                      {cancelingId === reg.id ? '取消中...' : '取消报名'}
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Upload certificate for finished events */}

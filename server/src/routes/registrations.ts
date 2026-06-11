@@ -44,8 +44,8 @@ router.post('/', (req: AuthRequest, res: Response) => {
     }
 
     const existingReg = db.prepare(
-      'SELECT id FROM registrations WHERE user_id = ? AND event_id = ?'
-    ).get(req.userId!, event_id);
+      'SELECT id FROM registrations WHERE user_id = ? AND event_id = ? AND payment_status != ?'
+    ).get(req.userId!, event_id, 'refunded');
     if (existingReg) {
       res.status(400).json({ error: '您已报名该赛事' });
       return;
@@ -127,6 +127,59 @@ router.post('/:id/certificate', (req: AuthRequest, res: Response) => {
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : '上传失败';
     res.status(500).json({ error: message });
+  }
+});
+
+router.delete('/:id', (req: AuthRequest, res: Response) => {
+  const trx = db.transaction(() => {
+    const reg = db.prepare(
+      'SELECT r.*, e.status as event_status, e.registration_deadline, e.fee ' +
+      'FROM registrations r JOIN events e ON r.event_id = e.id ' +
+      'WHERE r.id = ? AND r.user_id = ?'
+    ).get(req.params.id, req.userId!) as Record<string, unknown> | undefined;
+
+    if (!reg) {
+      res.status(404).json({ error: '报名记录不存在' });
+      return;
+    }
+
+    if (reg.payment_status === 'refunded') {
+      res.status(400).json({ error: '该报名已取消' });
+      return;
+    }
+
+    if (reg.event_status !== 'upcoming') {
+      res.status(400).json({ error: '赛事已开始或已结束，无法取消' });
+      return;
+    }
+
+    const deadline = new Date(reg.registration_deadline as string);
+    if (new Date() > deadline) {
+      res.status(400).json({ error: '报名已截止，无法取消' });
+      return;
+    }
+
+    db.prepare('UPDATE event_projects SET current_count = current_count - 1 WHERE id = ?')
+      .run(reg.project_id);
+
+    if (reg.payment_status === 'paid') {
+      db.prepare("UPDATE registrations SET payment_status = 'refunded' WHERE id = ?")
+        .run(req.params.id);
+      res.json({ data: { message: '取消成功，已申请退款', refunded: true, fee: reg.fee } });
+    } else {
+      db.prepare("UPDATE registrations SET payment_status = 'refunded' WHERE id = ?")
+        .run(req.params.id);
+      res.json({ data: { message: '取消成功', refunded: false } });
+    }
+  });
+
+  try {
+    trx();
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : '取消失败';
+    if (!res.headersSent) {
+      res.status(500).json({ error: message });
+    }
   }
 });
 

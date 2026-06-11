@@ -76,6 +76,15 @@ input, select, textarea {
   background: #366080;
 }
 
+.btn-danger {
+  background: #e53935;
+  color: white;
+}
+
+.btn-danger:hover {
+  background: #c62828;
+}
+
 .btn-outline {
   background: transparent;
   border: 2px solid #e63946;
