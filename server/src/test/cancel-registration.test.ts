@@ -31,18 +31,30 @@ function createEvent(): { id: number; projectId: number; fee: number } {
   return { id: eventId, projectId: pr.lastInsertRowid as number, fee: 200 };
 }
 
-function createRegistration(
-  userId: number,
+async function registerViaApi(
+  token: string,
   eventId: number,
   projectId: number,
-  paymentStatus: 'pending' | 'paid' = 'pending'
-): number {
-  const result = db
-    .prepare(
-      "INSERT INTO registrations (user_id, event_id, project_id, emergency_contact, emergency_phone, bib_number, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?)"
-    )
-    .run(userId, eventId, projectId, '张三', '13800000000', 'F0100001', paymentStatus);
-  return result.lastInsertRowid as number;
+  opts: { paid?: boolean } = {}
+): Promise<number> {
+  const res = await request(app)
+    .post('/api/registrations')
+    .set('Authorization', `Bearer ${token}`)
+    .send({
+      event_id: eventId,
+      project_id: projectId,
+      emergency_contact: '张三',
+      emergency_phone: '13800000000',
+    });
+  expect(res.status).toBe(201);
+  const regId = res.body.data.id as number;
+  if (opts.paid) {
+    const payRes = await request(app)
+      .post(`/api/registrations/${regId}/pay`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(payRes.status).toBe(200);
+  }
+  return regId;
 }
 
 function getProjectCount(projectId: number): number {
@@ -66,7 +78,7 @@ describe('取消报名接口 DELETE /api/registrations/:id', () => {
 
   describe('场景1: 已支付取消（标记退款）', () => {
     it('应将 payment_status 改为 refunded，返回 refunded=true 和费用，并释放名额', async () => {
-      const regId = createRegistration(user.id, event.id, event.projectId, 'paid');
+      const regId = await registerViaApi(user.token, event.id, event.projectId, { paid: true });
       const beforeCount = getProjectCount(event.projectId);
 
       const res = await request(app)
@@ -84,7 +96,7 @@ describe('取消报名接口 DELETE /api/registrations/:id', () => {
 
   describe('场景2: 未支付（pending）取消', () => {
     it('应将 payment_status 改为 refunded，返回 refunded=false，并释放名额', async () => {
-      const regId = createRegistration(user.id, event.id, event.projectId, 'pending');
+      const regId = await registerViaApi(user.token, event.id, event.projectId);
       const beforeCount = getProjectCount(event.projectId);
 
       const res = await request(app)
@@ -101,14 +113,15 @@ describe('取消报名接口 DELETE /api/registrations/:id', () => {
 
   describe('场景3: 重复取消', () => {
     it('第二次取消应返回 400 错误且不再次扣减名额', async () => {
-      const regId = createRegistration(user.id, event.id, event.projectId, 'paid');
+      const regId = await registerViaApi(user.token, event.id, event.projectId, { paid: true });
       const beforeCount = getProjectCount(event.projectId);
 
       const first = await request(app)
         .delete(`/api/registrations/${regId}`)
         .set('Authorization', `Bearer ${user.token}`);
       expect(first.status).toBe(200);
-      expect(getProjectCount(event.projectId)).toBe(beforeCount - 1);
+      const afterFirstCount = getProjectCount(event.projectId);
+      expect(afterFirstCount).toBe(beforeCount - 1);
 
       const second = await request(app)
         .delete(`/api/registrations/${regId}`)
@@ -116,20 +129,20 @@ describe('取消报名接口 DELETE /api/registrations/:id', () => {
 
       expect(second.status).toBe(400);
       expect(second.body.error).toBeDefined();
-      expect(getProjectCount(event.projectId)).toBe(beforeCount - 1);
+      expect(getProjectCount(event.projectId)).toBe(afterFirstCount);
     });
   });
 
   describe('场景4: 取消后允许重新报名', () => {
     it('取消原报名后重新 POST /registrations 应成功创建新记录，并重新占用名额', async () => {
-      const regId = createRegistration(user.id, event.id, event.projectId, 'pending');
-      const originalCount = getProjectCount(event.projectId);
+      const regId = await registerViaApi(user.token, event.id, event.projectId);
+      const afterFirstRegCount = getProjectCount(event.projectId);
 
       const cancelRes = await request(app)
         .delete(`/api/registrations/${regId}`)
         .set('Authorization', `Bearer ${user.token}`);
       expect(cancelRes.status).toBe(200);
-      expect(getProjectCount(event.projectId)).toBe(originalCount - 1);
+      expect(getProjectCount(event.projectId)).toBe(afterFirstRegCount - 1);
 
       const reRegRes = await request(app)
         .post('/api/registrations')
@@ -143,7 +156,7 @@ describe('取消报名接口 DELETE /api/registrations/:id', () => {
 
       expect(reRegRes.status).toBe(201);
       expect(reRegRes.body.data.id).not.toBe(regId);
-      expect(getProjectCount(event.projectId)).toBe(originalCount);
+      expect(getProjectCount(event.projectId)).toBe(afterFirstRegCount);
     });
   });
 
@@ -152,27 +165,31 @@ describe('取消报名接口 DELETE /api/registrations/:id', () => {
       const user2 = createUser('testuser2', 'test2@example.com');
       const initialCount = getProjectCount(event.projectId);
 
-      const reg1 = createRegistration(user.id, event.id, event.projectId, 'paid');
+      await registerViaApi(user.token, event.id, event.projectId, { paid: true });
       expect(getProjectCount(event.projectId)).toBe(initialCount + 1);
 
-      const reg2 = createRegistration(user2.id, event.id, event.projectId, 'pending');
+      const reg2 = await registerViaApi(user2.token, event.id, event.projectId);
       expect(getProjectCount(event.projectId)).toBe(initialCount + 2);
 
+      const myRes = await request(app)
+        .get('/api/registrations/my')
+        .set('Authorization', `Bearer ${user.token}`);
+      const reg1Id = myRes.body.data[0].id as number;
+
       const cancel = await request(app)
-        .delete(`/api/registrations/${reg1}`)
+        .delete(`/api/registrations/${reg1Id}`)
         .set('Authorization', `Bearer ${user.token}`);
       expect(cancel.status).toBe(200);
       expect(getProjectCount(event.projectId)).toBe(initialCount + 1);
 
-      const reg2Status = getPaymentStatus(reg2);
-      expect(reg2Status).toBe('pending');
+      expect(getPaymentStatus(reg2)).toBe('pending');
     });
   });
 
   describe('场景6: 越权和校验分支', () => {
     it('其他用户的报名记录应返回 404', async () => {
       const user2 = createUser('other', 'other@example.com');
-      const regId = createRegistration(user.id, event.id, event.projectId, 'paid');
+      const regId = await registerViaApi(user.token, event.id, event.projectId, { paid: true });
       const beforeCount = getProjectCount(event.projectId);
 
       const res = await request(app)
@@ -185,8 +202,8 @@ describe('取消报名接口 DELETE /api/registrations/:id', () => {
     });
 
     it('赛事状态非 upcoming 时应返回 400', async () => {
+      const regId = await registerViaApi(user.token, event.id, event.projectId, { paid: true });
       db.prepare("UPDATE events SET status = 'finished' WHERE id = ?").run(event.id);
-      const regId = createRegistration(user.id, event.id, event.projectId, 'paid');
 
       const res = await request(app)
         .delete(`/api/registrations/${regId}`)
@@ -197,7 +214,7 @@ describe('取消报名接口 DELETE /api/registrations/:id', () => {
     });
 
     it('未登录应返回 401', async () => {
-      const regId = createRegistration(user.id, event.id, event.projectId, 'paid');
+      const regId = await registerViaApi(user.token, event.id, event.projectId, { paid: true });
       const res = await request(app).delete(`/api/registrations/${regId}`);
       expect(res.status).toBe(401);
     });
@@ -205,7 +222,7 @@ describe('取消报名接口 DELETE /api/registrations/:id', () => {
 
   describe('场景7: /api/registrations/my 返回的数据结构', () => {
     it('取消报名后记录仍存在于 my 列表中，但 payment_status 为 refunded', async () => {
-      const regId = createRegistration(user.id, event.id, event.projectId, 'paid');
+      const regId = await registerViaApi(user.token, event.id, event.projectId, { paid: true });
       await request(app)
         .delete(`/api/registrations/${regId}`)
         .set('Authorization', `Bearer ${user.token}`);
