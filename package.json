@@ -1,0 +1,15 @@
+{
+  "name": "wje-115-marathon-registration",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,client -c blue,green \"npm run dev -w server\" \"npm run dev -w client\""
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
